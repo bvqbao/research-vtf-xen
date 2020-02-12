@@ -4089,6 +4089,12 @@ int xenmem_add_to_physmap_one(
             if ( idx == 0 )
                 mfn = _mfn(virt_to_mfn(d->shared_info));
             break;
+        case XENMAPSPACE_pml_shared_info:
+            mfn = mfn_add(_mfn(virt_to_mfn(d->vtf_info.pml)), idx);
+
+            printk(XENLOG_INFO "XENMAPSPACE_pml_shared_info: idx=%lu, gpfn=%lu, mfn=%lu\n",
+                        idx, gfn_x(gpfn), mfn_x(mfn));
+            break;
         case XENMAPSPACE_grant_table:
             rc = gnttab_map_frame(d, idx, gpfn, &mfn);
             if ( rc )
@@ -4156,7 +4162,11 @@ int xenmem_add_to_physmap_one(
 
     /* Map at new location. */
     if ( !rc )
+    {
         rc = guest_physmap_add_page(d, gpfn, mfn, PAGE_ORDER_4K);
+        if ( space == XENMAPSPACE_pml_shared_info )
+            d->vtf_info.pml[0] = 69;
+    }
 
  put_both:
     /* In the XENMAPSPACE_gmfn, we took a ref of the gfn at the top */

@@ -311,6 +311,9 @@ struct domain
 
     shared_info_t   *shared_info;     /* shared data area */
 
+    spinlock_t vtf_pml_lock;
+    vtf_info_t vtf_info;
+
     spinlock_t       domain_lock;
 
     spinlock_t       page_alloc_lock; /* protects all the following fields  */

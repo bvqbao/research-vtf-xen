@@ -748,13 +748,41 @@ static int xenmem_add_to_physmap(struct domain *d,
     unsigned int done = 0;
     long rc = 0;
     union xen_add_to_physmap_batch_extra extra;
+    struct page_info *page;
+    unsigned int i, order;
+
+    if (xatp->space == XENMAPSPACE_pml_shared_info && !d->vtf_info.pml)
+    {
+        order = get_order_from_pages(xatp->size);
+        if ( (d->vtf_info.pml = alloc_xenheap_pages(order, 0)) == NULL )
+            return -ENOMEM;
+
+        d->vtf_info.pml_page_order = order;
+        d->vtf_info.nr_pml_entries = (1u << order) * PAGE_SIZE / sizeof(unsigned long) - 1;
+
+        printk(XENLOG_INFO "Init VTF shared info: page order=%u, nr_pml_entries=%u\n",
+                        d->vtf_info.pml_page_order,
+                        d->vtf_info.nr_pml_entries);
+
+        page = virt_to_page(d->vtf_info.pml);
+        for (i = 0; i < (1u << order); i++)
+        {
+
+            printk(XENLOG_INFO "Init VTF shared info: i=%u, mfn=%lu\n",
+                        i, mfn_x(page_to_mfn(page+i)));
+
+            clear_page(page_to_virt(page+i));
+            share_xen_page_with_guest(page+i, d, XENSHARE_writable);
+        }
+    }
 
     if ( xatp->space != XENMAPSPACE_gmfn_foreign )
         extra.res0 = 0;
     else
         extra.foreign_domid = DOMID_INVALID;
 
-    if ( xatp->space != XENMAPSPACE_gmfn_range )
+    if ( xatp->space != XENMAPSPACE_gmfn_range &&
+            xatp->space != XENMAPSPACE_pml_shared_info)
         return xenmem_add_to_physmap_one(d, xatp->space, extra,
                                          xatp->idx, _gfn(xatp->gpfn));
 
@@ -766,7 +794,7 @@ static int xenmem_add_to_physmap(struct domain *d,
     xatp->size -= start;
 
 #ifdef CONFIG_HAS_PASSTHROUGH
-    if ( need_iommu(d) )
+    if ( need_iommu(d) && xatp->space != XENMAPSPACE_pml_shared_info)
         this_cpu(iommu_dont_flush_iotlb) = 1;
 #endif
 
@@ -789,7 +817,7 @@ static int xenmem_add_to_physmap(struct domain *d,
     }
 
 #ifdef CONFIG_HAS_PASSTHROUGH
-    if ( need_iommu(d) )
+    if ( need_iommu(d) && xatp->space != XENMAPSPACE_pml_shared_info)
     {
         int ret;
 
@@ -1127,7 +1155,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 
         rcu_unlock_domain(d);
 
-        if ( xatp.space == XENMAPSPACE_gmfn_range && rc > 0 )
+        if ( ( xatp.space == XENMAPSPACE_gmfn_range ||
+                xatp.space == XENMAPSPACE_pml_shared_info ) && rc > 0 )
             rc = hypercall_create_continuation(
                      __HYPERVISOR_memory_op, "lh",
                      op | (rc << MEMOP_EXTENT_SHIFT), arg);

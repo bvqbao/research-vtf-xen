@@ -102,7 +102,7 @@ static void play_dead(void)
      * as they may be freed at any time. In this case, heap corruption or
      * #PF can occur (when heap debugging is enabled). For example, even
      * printk() can involve tasklet scheduling, which touches per-cpu vars.
-     * 
+     *
      * Consider very carefully when adding code to *dead_idle. Most hypervisor
      * subsystems are unsafe to call.
      */
@@ -495,7 +495,7 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags,
         if ( (rc = init_domain_msr_policy(d)) )
             goto fail;
 
-        d->arch.ioport_caps = 
+        d->arch.ioport_caps =
             rangeset_new(d, "I/O Ports", RANGESETF_prettyprint_hex);
         rc = -ENOMEM;
         if ( d->arch.ioport_caps == NULL )
@@ -593,6 +593,8 @@ void arch_domain_destroy(struct domain *d)
     free_perdomain_mappings(d);
 
     free_xenheap_page(d->shared_info);
+    if ( d->vtf_info.pml )
+        free_xenheap_pages(d->vtf_info.pml, d->vtf_info.pml_page_order);
     cleanup_domain_irq_mapping(d);
 
     psr_domain_free(d);
@@ -2034,7 +2036,7 @@ void vcpu_kick(struct vcpu *v)
      * pending flag. These values may fluctuate (after all, we hold no
      * locks) but the key insight is that each change will cause
      * evtchn_upcall_pending to be polled.
-     * 
+     *
      * NB2. We save the running flag across the unblock to avoid a needless
      * IPI for domains that we IPI'd to unblock.
      */
