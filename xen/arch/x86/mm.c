@@ -4164,6 +4164,8 @@ int xenmem_add_to_physmap_one(
     if ( !rc )
     {
         rc = guest_physmap_add_page(d, gpfn, mfn, PAGE_ORDER_4K);
+
+        /* Test shared memory buffer */
         if ( space == XENMAPSPACE_pml_shared_info )
             d->vtf_info.pml[0] = 69;
     }
