@@ -235,6 +235,9 @@ struct vcpu_register_time_memory_area {
 typedef struct vcpu_register_time_memory_area vcpu_register_time_memory_area_t;
 DEFINE_XEN_GUEST_HANDLE(vcpu_register_time_memory_area_t);
 
+#define VCPUOP_vtf_enable_pml       14
+#define VCPUOP_vtf_disable_pml      15
+
 #endif /* __XEN_PUBLIC_VCPU_H__ */
 
 /*

@@ -313,6 +313,7 @@ struct domain
 
     spinlock_t vtf_pml_lock;
     vtf_info_t vtf_info;
+    atomic_t vtf_pml_flag;
 
     spinlock_t       domain_lock;
 

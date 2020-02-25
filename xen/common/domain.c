@@ -1408,6 +1408,46 @@ long do_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
         break;
     }
 
+    case VCPUOP_vtf_enable_pml:
+    {
+        if ( ! vmx_domain_pml_enabled(d) &&
+                ! atomic_cmpxchg(&d->vtf_pml_flag, 0, 1) )
+        {
+            domain_pause_by_systemcontroller_nosync(d);
+
+            printk(XENLOG_INFO "VCPUOP_vtf_enable_pml: enabling PML\n");
+            p2m_enable_hardware_log_dirty(d);
+            printk(XENLOG_INFO "VCPUOP_vtf_enable_pml: PML enabled? %d\n",
+                vmx_domain_pml_enabled(d));
+
+            domain_unpause_by_systemcontroller(d);
+
+            atomic_set(&d->vtf_pml_flag, 0);
+        }
+
+        break;
+    }
+
+    case VCPUOP_vtf_disable_pml:
+    {
+        if ( vmx_domain_pml_enabled(d) &&
+                ! atomic_cmpxchg(&d->vtf_pml_flag, 0, 1) )
+        {
+            domain_pause_by_systemcontroller_nosync(d);
+
+            printk(XENLOG_INFO "VCPUOP_vtf_disable_pml: disabling PML\n");
+            p2m_disable_hardware_log_dirty(d);
+            printk(XENLOG_INFO "VCPUOP_vtf_disable_pml: PML enabled? %d\n",
+                vmx_domain_pml_enabled(d));
+
+            domain_unpause_by_systemcontroller(d);
+
+            atomic_set(&d->vtf_pml_flag, 0);
+        }
+
+        break;
+    }
+
 #ifdef VCPU_TRAP_NMI
     case VCPUOP_send_nmi:
         if ( !guest_handle_is_null(arg) )

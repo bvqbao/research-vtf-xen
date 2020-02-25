@@ -763,6 +763,8 @@ struct shared_info {
 
     struct arch_shared_info arch;
 
+    uint32_t vcpu_pml_info;
+
 };
 #ifndef __XEN__
 typedef struct shared_info shared_info_t;
