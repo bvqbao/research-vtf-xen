@@ -311,10 +311,6 @@ struct domain
 
     shared_info_t   *shared_info;     /* shared data area */
 
-    spinlock_t vtf_pml_lock;
-    vtf_info_t vtf_info;
-    atomic_t vtf_pml_flag;
-
     spinlock_t       domain_lock;
 
     spinlock_t       page_alloc_lock; /* protects all the following fields  */
@@ -488,6 +484,10 @@ struct domain
         unsigned int guest_request_enabled       : 1;
         unsigned int guest_request_sync          : 1;
     } monitor;
+
+    spinlock_t vtf_pml_lock;
+    vtf_info_t vtf_info;
+    atomic_t vtf_pml_flag;
 };
 
 /* Protect updates/reads (resp.) of domain_list and domain_hash. */
