@@ -1413,14 +1413,17 @@ long do_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( ! vmx_domain_pml_enabled(d) &&
                 ! atomic_cmpxchg(&d->vtf_pml_flag, 0, 1) )
         {
-            domain_pause_by_systemcontroller_nosync(d);
+            //domain_pause_by_systemcontroller_nosync(d);
 
             printk(XENLOG_INFO "VCPUOP_vtf_enable_pml: enabling PML\n");
-            p2m_enable_hardware_log_dirty(d);
+
+            //p2m_enable_hardware_log_dirty(d);
+	    paging_log_dirty_enable(d, 1);
+
             printk(XENLOG_INFO "VCPUOP_vtf_enable_pml: PML enabled? %d\n",
                 vmx_domain_pml_enabled(d));
 
-            domain_unpause_by_systemcontroller(d);
+            //domain_unpause_by_systemcontroller(d);
 
             atomic_set(&d->vtf_pml_flag, 0);
         }
@@ -1436,7 +1439,11 @@ long do_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
             domain_pause_by_systemcontroller_nosync(d);
 
             printk(XENLOG_INFO "VCPUOP_vtf_disable_pml: disabling PML\n");
-            p2m_disable_hardware_log_dirty(d);
+
+            //p2m_disable_hardware_log_dirty(d);
+	    if ( paging_mode_log_dirty(d) )
+		    d->arch.paging.log_dirty.ops->disable(d);
+
             printk(XENLOG_INFO "VCPUOP_vtf_disable_pml: PML enabled? %d\n",
                 vmx_domain_pml_enabled(d));
 

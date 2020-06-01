@@ -1470,6 +1470,22 @@ void vmx_vcpu_disable_pml(struct vcpu *v)
     v->arch.hvm_vmx.pml_pg = NULL;
 }
 
+static unsigned long pml_get_gpfn(struct domain *d, unsigned long gfn_l)
+{
+	p2m_access_t a;
+	p2m_type_t pt;
+	gfn_t gfn = _gfn(gfn_l);
+	struct p2m_domain *p2m = p2m_get_hostp2m(d);
+	mfn_t mfn;
+
+	mfn = p2m->get_entry(p2m, gfn, &pt, &a, 0, NULL, NULL);
+
+	if (!mfn_valid(mfn) || page_get_owner(mfn_to_page(mfn)) != d)
+		return 0;
+
+	return get_gpfn_from_mfn(mfn_x(mfn));
+}
+
 void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
 {
     uint64_t *pml_buf;
@@ -1502,6 +1518,7 @@ void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
     for ( ; pml_idx < NR_PML_ENTRIES; pml_idx++ )
     {
         unsigned long gfn = pml_buf[pml_idx] >> PAGE_SHIFT;
+	unsigned long gpfn;
 
         /*
          * Need to change type from log-dirty to normal memory for logged GFN.
@@ -1516,16 +1533,19 @@ void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
         /* HVM guest: pfn == gfn */
         paging_mark_pfn_dirty(v->domain, _pfn(gfn));
 
-        /* Save GFNs to the shared memory. */
+	gpfn = pml_get_gpfn(v->domain, gfn);
+
         spin_lock(&v->domain->vtf_pml_lock);
 
-        /* shared_pml[0] stores the index of shared_pml array. */
         shared_pml = v->domain->vtf_info.pml;
-
-        if (shared_pml && shared_pml[0] < v->domain->vtf_info.nr_pml_entries)
+        if ( shared_pml && shared_pml[0] < v->domain->vtf_info.nr_pml_entries && gpfn > 0 )
         {
-            shared_pml[++shared_pml[0]] = gfn;
-            if (shared_pml[0] == v->domain->vtf_info.nr_pml_entries)
+            shared_pml[++shared_pml[0]] = gpfn;
+
+	    if ( shared_pml[0] < 10 )
+		printk(XENLOG_INFO "vcpu[%d]: log gpfn %lu\n", v->vcpu_id, gpfn);
+
+            if ( shared_pml[0] == v->domain->vtf_info.nr_pml_entries )
                 send_guest_vcpu_virq(v, VIRQ_VTF_PML);
         }
 
