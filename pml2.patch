@@ -1,0 +1,46 @@
+diff --git a/xen/arch/x86/hvm/vmx/vmcs.c b/xen/arch/x86/hvm/vmx/vmcs.c
+index b5100b5..8321aaa 100644
+--- a/xen/arch/x86/hvm/vmx/vmcs.c
++++ b/xen/arch/x86/hvm/vmx/vmcs.c
+@@ -1474,6 +1474,7 @@ void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
+ {
+     uint64_t *pml_buf;
+     unsigned long pml_idx;
++    unsigned long *shared_pml;
+ 
+     ASSERT((v == current) || (!vcpu_runnable(v) && !v->is_running));
+     ASSERT(vmx_vcpu_pml_enabled(v));
+@@ -1514,6 +1515,21 @@ void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
+ 
+         /* HVM guest: pfn == gfn */
+         paging_mark_pfn_dirty(v->domain, _pfn(gfn));
++
++        /* Save GFNs to the shared memory. */
++        spin_lock(&v->domain->vtf_pml_lock);
++
++        /* shared_pml[0] stores the index of shared_pml array. */
++        shared_pml = v->domain->vtf_info.pml;
++
++        if (shared_pml && shared_pml[0] < v->domain->vtf_info.nr_pml_entries)
++        {
++            shared_pml[++shared_pml[0]] = gfn;
++            if (shared_pml[0] == v->domain->vtf_info.nr_pml_entries)
++                send_guest_vcpu_virq(v, VIRQ_VTF_PML);
++        }
++
++        spin_unlock(&v->domain->vtf_pml_lock);
+     }
+ 
+     unmap_domain_page(pml_buf);
+diff --git a/xen/common/event_channel.c b/xen/common/event_channel.c
+index c69f9db..14a66a5 100644
+--- a/xen/common/event_channel.c
++++ b/xen/common/event_channel.c
+@@ -105,6 +105,7 @@ static int virq_is_global(uint32_t virq)
+     case VIRQ_DEBUG:
+     case VIRQ_XENOPROF:
+     case VIRQ_XENPMU:
++    case VIRQ_VTF_PML:
+         rc = 0;
+         break;
+     case VIRQ_ARCH_0 ... VIRQ_ARCH_7:

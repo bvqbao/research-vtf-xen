@@ -1,0 +1,94 @@
+diff --git a/tools/misc/xen-livepatch.c b/tools/misc/xen-livepatch.c
+index af9fcd6..445b53a 100644
+--- a/tools/misc/xen-livepatch.c
++++ b/tools/misc/xen-livepatch.c
+@@ -171,7 +171,10 @@ static int upload_func(int argc, char *argv[])
+     }
+ 
+     if ( get_name(argc, argv, name) )
++    {
++        printf("upload_func(): getname() returns EINVAL\n");
+         return EINVAL;
++    }
+ 
+     filename = argv[1];
+     fd = open(filename, O_RDONLY);
+@@ -209,7 +212,7 @@ static int upload_func(int argc, char *argv[])
+     if ( rc )
+     {
+         rc = errno;
+-        printf("failed\n");
++        printf("failed, len = %ld, max = %lu\n", len, 2UL << 20);
+         fprintf(stderr, "Error %d: %s\n", rc, strerror(rc));
+     }
+     else
+@@ -408,6 +411,8 @@ static int load_func(int argc, char *argv[])
+     /* <file> */
+     new_argv[1] = argv[0];
+ 
++    printf("load_func(): %s\n", new_argv[1]);
++
+     /* Synthesize the <id> */
+     path = strdup(argv[0]);
+ 
+@@ -417,13 +422,21 @@ static int load_func(int argc, char *argv[])
+         *lastdot = '\0';
+     new_argv[0] = name;
+ 
++    printf("load_func(): %s\n", new_argv[0]);
++
+     rc = upload_func(2 /* <id> <file> */, new_argv);
+     if ( rc )
++    {
++        printf("load_func(): upload_func() return %d\n", rc);
+         return rc;
++    }
+ 
+     rc = action_func(1 /* only <id> */, new_argv, ACTION_APPLY);
+     if ( rc )
++    {
++        printf("load_func(): action_func() return %d\n", rc);
+         action_func(1, new_argv, ACTION_UNLOAD);
++    }
+ 
+     free(path);
+     return rc;
+diff --git a/xen/common/livepatch.c b/xen/common/livepatch.c
+index b9376c9..d0a5024 100644
+--- a/xen/common/livepatch.c
++++ b/xen/common/livepatch.c
+@@ -124,13 +124,23 @@ static int get_name(const struct xen_livepatch_name *name, char *n)
+ static int verify_payload(const struct xen_sysctl_livepatch_upload *upload, char *n)
+ {
+     if ( get_name(&upload->name, n) )
++    {
++        printk(XENLOG_INFO "verify_payload(): invalid name!\n");
+         return -EINVAL;
++    }
+ 
+     if ( !upload->size )
++    {
++        printk(XENLOG_INFO "verify_payload(): invalid size: 0!\n");
+         return -EINVAL;
++    }
+ 
+     if ( upload->size > LIVEPATCH_MAX_SIZE )
++    {
++        printk(XENLOG_INFO "verify_payload(): invalid size: %lu vs. %llu!\n",
++            upload->size, LIVEPATCH_MAX_SIZE);
+         return -EINVAL;
++    }
+ 
+     if ( !guest_handle_okay(upload->payload, upload->size) )
+         return -EFAULT;
+@@ -929,7 +939,10 @@ static int livepatch_upload(struct xen_sysctl_livepatch_upload *upload)
+ 
+         rc = load_payload_data(data, raw_data, upload->size);
+         if ( rc )
++        {
++            printk(XENLOG_INFO "verify_payload(): load_payload_data() returns %d!\n", rc);
+             goto out;
++        }
+ 
+         data->state = LIVEPATCH_STATE_CHECKED;
+         INIT_LIST_HEAD(&data->list);

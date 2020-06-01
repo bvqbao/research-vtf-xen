@@ -1,0 +1,307 @@
+diff --git a/xen/arch/x86/domain.c b/xen/arch/x86/domain.c
+index 735f45c..f68e940 100644
+--- a/xen/arch/x86/domain.c
++++ b/xen/arch/x86/domain.c
+@@ -102,7 +102,7 @@ static void play_dead(void)
+      * as they may be freed at any time. In this case, heap corruption or
+      * #PF can occur (when heap debugging is enabled). For example, even
+      * printk() can involve tasklet scheduling, which touches per-cpu vars.
+-     * 
++     *
+      * Consider very carefully when adding code to *dead_idle. Most hypervisor
+      * subsystems are unsafe to call.
+      */
+@@ -495,7 +495,7 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags,
+         if ( (rc = init_domain_msr_policy(d)) )
+             goto fail;
+ 
+-        d->arch.ioport_caps = 
++        d->arch.ioport_caps =
+             rangeset_new(d, "I/O Ports", RANGESETF_prettyprint_hex);
+         rc = -ENOMEM;
+         if ( d->arch.ioport_caps == NULL )
+@@ -593,6 +593,8 @@ void arch_domain_destroy(struct domain *d)
+     free_perdomain_mappings(d);
+ 
+     free_xenheap_page(d->shared_info);
++    if ( d->vtf_info.pml )
++        free_xenheap_pages(d->vtf_info.pml, d->vtf_info.pml_page_order);
+     cleanup_domain_irq_mapping(d);
+ 
+     psr_domain_free(d);
+@@ -2034,7 +2036,7 @@ void vcpu_kick(struct vcpu *v)
+      * pending flag. These values may fluctuate (after all, we hold no
+      * locks) but the key insight is that each change will cause
+      * evtchn_upcall_pending to be polled.
+-     * 
++     *
+      * NB2. We save the running flag across the unblock to avoid a needless
+      * IPI for domains that we IPI'd to unblock.
+      */
+diff --git a/xen/arch/x86/hvm/vmx/vmcs.c b/xen/arch/x86/hvm/vmx/vmcs.c
+index b5100b5..8321aaa 100644
+--- a/xen/arch/x86/hvm/vmx/vmcs.c
++++ b/xen/arch/x86/hvm/vmx/vmcs.c
+@@ -1474,6 +1474,7 @@ void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
+ {
+     uint64_t *pml_buf;
+     unsigned long pml_idx;
++    unsigned long *shared_pml;
+ 
+     ASSERT((v == current) || (!vcpu_runnable(v) && !v->is_running));
+     ASSERT(vmx_vcpu_pml_enabled(v));
+@@ -1514,6 +1515,21 @@ void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
+ 
+         /* HVM guest: pfn == gfn */
+         paging_mark_pfn_dirty(v->domain, _pfn(gfn));
++
++        /* Save GFNs to the shared memory. */
++        spin_lock(&v->domain->vtf_pml_lock);
++
++        /* shared_pml[0] stores the index of shared_pml array. */
++        shared_pml = v->domain->vtf_info.pml;
++
++        if (shared_pml && shared_pml[0] < v->domain->vtf_info.nr_pml_entries)
++        {
++            shared_pml[++shared_pml[0]] = gfn;
++            if (shared_pml[0] == v->domain->vtf_info.nr_pml_entries)
++                send_guest_vcpu_virq(v, VIRQ_VTF_PML);
++        }
++
++        spin_unlock(&v->domain->vtf_pml_lock);
+     }
+ 
+     unmap_domain_page(pml_buf);
+diff --git a/xen/arch/x86/mm.c b/xen/arch/x86/mm.c
+index a7a76a7..0de26b1 100644
+--- a/xen/arch/x86/mm.c
++++ b/xen/arch/x86/mm.c
+@@ -4089,6 +4089,12 @@ int xenmem_add_to_physmap_one(
+             if ( idx == 0 )
+                 mfn = _mfn(virt_to_mfn(d->shared_info));
+             break;
++        case XENMAPSPACE_pml_shared_info:
++            mfn = mfn_add(_mfn(virt_to_mfn(d->vtf_info.pml)), idx);
++
++            printk(XENLOG_INFO "XENMAPSPACE_pml_shared_info: idx=%lu, gpfn=%lu, mfn=%lu\n",
++                        idx, gfn_x(gpfn), mfn_x(mfn));
++            break;
+         case XENMAPSPACE_grant_table:
+             rc = gnttab_map_frame(d, idx, gpfn, &mfn);
+             if ( rc )
+diff --git a/xen/common/domain.c b/xen/common/domain.c
+index 7484693..98febc6 100644
+--- a/xen/common/domain.c
++++ b/xen/common/domain.c
+@@ -1408,6 +1408,46 @@ long do_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
+         break;
+     }
+ 
++    case VCPUOP_vtf_enable_pml:
++    {
++        if ( ! vmx_domain_pml_enabled(d) &&
++                ! atomic_cmpxchg(&d->vtf_pml_flag, 0, 1) )
++        {
++            domain_pause_by_systemcontroller_nosync(d);
++
++            printk(XENLOG_INFO "VCPUOP_vtf_enable_pml: enabling PML\n");
++            p2m_enable_hardware_log_dirty(d);
++            printk(XENLOG_INFO "VCPUOP_vtf_enable_pml: PML enabled? %d\n",
++                vmx_domain_pml_enabled(d));
++
++            domain_unpause_by_systemcontroller(d);
++
++            atomic_set(&d->vtf_pml_flag, 0);
++        }
++
++        break;
++    }
++
++    case VCPUOP_vtf_disable_pml:
++    {
++        if ( vmx_domain_pml_enabled(d) &&
++                ! atomic_cmpxchg(&d->vtf_pml_flag, 0, 1) )
++        {
++            domain_pause_by_systemcontroller_nosync(d);
++
++            printk(XENLOG_INFO "VCPUOP_vtf_disable_pml: disabling PML\n");
++            p2m_disable_hardware_log_dirty(d);
++            printk(XENLOG_INFO "VCPUOP_vtf_disable_pml: PML enabled? %d\n",
++                vmx_domain_pml_enabled(d));
++
++            domain_unpause_by_systemcontroller(d);
++
++            atomic_set(&d->vtf_pml_flag, 0);
++        }
++
++        break;
++    }
++
+ #ifdef VCPU_TRAP_NMI
+     case VCPUOP_send_nmi:
+         if ( !guest_handle_is_null(arg) )
+diff --git a/xen/common/event_channel.c b/xen/common/event_channel.c
+index c69f9db..14a66a5 100644
+--- a/xen/common/event_channel.c
++++ b/xen/common/event_channel.c
+@@ -105,6 +105,7 @@ static int virq_is_global(uint32_t virq)
+     case VIRQ_DEBUG:
+     case VIRQ_XENOPROF:
+     case VIRQ_XENPMU:
++    case VIRQ_VTF_PML:
+         rc = 0;
+         break;
+     case VIRQ_ARCH_0 ... VIRQ_ARCH_7:
+diff --git a/xen/common/memory.c b/xen/common/memory.c
+index a6ba33f..99fee94 100644
+--- a/xen/common/memory.c
++++ b/xen/common/memory.c
+@@ -748,13 +748,41 @@ static int xenmem_add_to_physmap(struct domain *d,
+     unsigned int done = 0;
+     long rc = 0;
+     union xen_add_to_physmap_batch_extra extra;
++    struct page_info *page;
++    unsigned int i, order;
++
++    if (xatp->space == XENMAPSPACE_pml_shared_info && !d->vtf_info.pml)
++    {
++        order = get_order_from_pages(xatp->size);
++        if ( (d->vtf_info.pml = alloc_xenheap_pages(order, 0)) == NULL )
++            return -ENOMEM;
++
++        d->vtf_info.pml_page_order = order;
++        d->vtf_info.nr_pml_entries = (1u << order) * PAGE_SIZE / sizeof(unsigned long) - 1;
++
++        printk(XENLOG_INFO "Init VTF shared info: page order=%u, nr_pml_entries=%u\n",
++                        d->vtf_info.pml_page_order,
++                        d->vtf_info.nr_pml_entries);
++
++        page = virt_to_page(d->vtf_info.pml);
++        for (i = 0; i < (1u << order); i++)
++        {
++
++            printk(XENLOG_INFO "Init VTF shared info: i=%u, mfn=%lu\n",
++                        i, mfn_x(page_to_mfn(page+i)));
++
++            clear_page(page_to_virt(page+i));
++            share_xen_page_with_guest(page+i, d, XENSHARE_writable);
++        }
++    }
+ 
+     if ( xatp->space != XENMAPSPACE_gmfn_foreign )
+         extra.res0 = 0;
+     else
+         extra.foreign_domid = DOMID_INVALID;
+ 
+-    if ( xatp->space != XENMAPSPACE_gmfn_range )
++    if ( xatp->space != XENMAPSPACE_gmfn_range &&
++            xatp->space != XENMAPSPACE_pml_shared_info)
+         return xenmem_add_to_physmap_one(d, xatp->space, extra,
+                                          xatp->idx, _gfn(xatp->gpfn));
+ 
+@@ -766,7 +794,7 @@ static int xenmem_add_to_physmap(struct domain *d,
+     xatp->size -= start;
+ 
+ #ifdef CONFIG_HAS_PASSTHROUGH
+-    if ( need_iommu(d) )
++    if ( need_iommu(d) && xatp->space != XENMAPSPACE_pml_shared_info)
+         this_cpu(iommu_dont_flush_iotlb) = 1;
+ #endif
+ 
+@@ -789,7 +817,7 @@ static int xenmem_add_to_physmap(struct domain *d,
+     }
+ 
+ #ifdef CONFIG_HAS_PASSTHROUGH
+-    if ( need_iommu(d) )
++    if ( need_iommu(d) && xatp->space != XENMAPSPACE_pml_shared_info)
+     {
+         int ret;
+ 
+@@ -1127,7 +1155,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+ 
+         rcu_unlock_domain(d);
+ 
+-        if ( xatp.space == XENMAPSPACE_gmfn_range && rc > 0 )
++        if ( ( xatp.space == XENMAPSPACE_gmfn_range ||
++                xatp.space == XENMAPSPACE_pml_shared_info ) && rc > 0 )
+             rc = hypercall_create_continuation(
+                      __HYPERVISOR_memory_op, "lh",
+                      op | (rc << MEMOP_EXTENT_SHIFT), arg);
+diff --git a/xen/include/public/memory.h b/xen/include/public/memory.h
+index 29386df..31d6ba2 100644
+--- a/xen/include/public/memory.h
++++ b/xen/include/public/memory.h
+@@ -1,8 +1,8 @@
+ /******************************************************************************
+  * memory.h
+- * 
++ *
+  * Memory reservation and information.
+- * 
++ *
+  * Permission is hereby granted, free of charge, to any person obtaining a copy
+  * of this software and associated documentation files (the "Software"), to
+  * deal in the Software without restriction, including without limitation the
+@@ -41,9 +41,9 @@
+ 
+ #if __XEN_INTERFACE_VERSION__ >= 0x00030209
+ /*
+- * Maximum # bits addressable by the user of the allocated region (e.g., I/O 
+- * devices often have a 32-bit limitation even in 64-bit systems). If zero 
+- * then the user has no addressing restriction. This field is not used by 
++ * Maximum # bits addressable by the user of the allocated region (e.g., I/O
++ * devices often have a 32-bit limitation even in 64-bit systems). If zero
++ * then the user has no addressing restriction. This field is not used by
+  * XENMEM_decrease_reservation.
+  */
+ #define XENMEMF_address_bits(x)     (x)
+@@ -117,7 +117,7 @@ struct xen_memory_exchange {
+      * [IN/OUT] Details of new memory extents.
+      * We require that:
+      *  1. @in.domid == @out.domid
+-     *  2. @in.nr_extents  << @in.extent_order == 
++     *  2. @in.nr_extents  << @in.extent_order ==
+      *     @out.nr_extents << @out.extent_order
+      *  3. @in.extent_start and @out.extent_start lists must not overlap
+      *  4. @out.extent_start lists GPFN bases to be populated
+@@ -229,6 +229,8 @@ DEFINE_XEN_GUEST_HANDLE(xen_machphys_mapping_t);
+                                       memory attribute. */
+ /* ` } */
+ 
++#define XENMAPSPACE_pml_shared_info 30
++
+ /*
+  * Sets the GPFN at which a particular page appears in the specified guest's
+  * pseudophysical address space.
+@@ -382,7 +384,7 @@ typedef struct xen_pod_target xen_pod_target_t;
+ 
+ /*
+  * Get the number of MFNs saved through memory sharing.
+- * The call never fails. 
++ * The call never fails.
+  */
+ #define XENMEM_get_sharing_freed_pages    18
+ #define XENMEM_get_sharing_shared_pages   19
+@@ -488,7 +490,7 @@ DEFINE_XEN_GUEST_HANDLE(xen_mem_access_op_t);
+ 
+ /* The following allows sharing of grant refs. This is useful
+  * for sharing utilities sitting as "filters" in IO backends
+- * (e.g. memshr + blktap(2)). The IO backend is only exposed 
++ * (e.g. memshr + blktap(2)). The IO backend is only exposed
+  * to grant references, and this allows sharing of the grefs */
+ #define XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG   (xen_mk_ullong(1) << 62)
+ 
+diff --git a/xen/include/public/vcpu.h b/xen/include/public/vcpu.h
+index 8a9e30d..c971300 100644
+--- a/xen/include/public/vcpu.h
++++ b/xen/include/public/vcpu.h
+@@ -235,6 +235,9 @@ struct vcpu_register_time_memory_area {
+ typedef struct vcpu_register_time_memory_area vcpu_register_time_memory_area_t;
+ DEFINE_XEN_GUEST_HANDLE(vcpu_register_time_memory_area_t);
+ 
++#define VCPUOP_vtf_enable_pml       14
++#define VCPUOP_vtf_disable_pml      15
++
+ #endif /* __XEN_PUBLIC_VCPU_H__ */
+ 
+ /*

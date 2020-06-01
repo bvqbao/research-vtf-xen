@@ -1,0 +1,54 @@
+diff --git a/xen/drivers/passthrough/vtd/iommu.c b/xen/drivers/passthrough/vtd/iommu.c
+index daaed0a..68e6614 100644
+--- a/xen/drivers/passthrough/vtd/iommu.c
++++ b/xen/drivers/passthrough/vtd/iommu.c
+@@ -871,40 +871,40 @@ static int iommu_page_fault_do_one(struct iommu *iommu, int type,
+ {
+     const char *reason, *kind;
+     enum faulttype fault_type;
+-    u16 seg = iommu->intel->drhd->segment;
++    //u16 seg = iommu->intel->drhd->segment;
+ 
+     reason = iommu_get_fault_reason(fault_reason, &fault_type);
+     switch ( fault_type )
+     {
+     case DMA_REMAP:
+-        printk(XENLOG_G_WARNING VTDPREFIX
++        /*printk(XENLOG_G_WARNING VTDPREFIX
+                "DMAR:[%s] Request device [%04x:%02x:%02x.%u] "
+                "fault addr %"PRIx64", iommu reg = %p\n",
+                (type ? "DMA Read" : "DMA Write"),
+                seg, PCI_BUS(source_id), PCI_SLOT(source_id),
+-               PCI_FUNC(source_id), addr, iommu->reg);
++               PCI_FUNC(source_id), addr, iommu->reg);*/
+         kind = "DMAR";
+         break;
+     case INTR_REMAP:
+-        printk(XENLOG_G_WARNING VTDPREFIX
++        /*printk(XENLOG_G_WARNING VTDPREFIX
+                "INTR-REMAP: Request device [%04x:%02x:%02x.%u] "
+                "fault index %"PRIx64", iommu reg = %p\n",
+                seg, PCI_BUS(source_id), PCI_SLOT(source_id),
+-               PCI_FUNC(source_id), addr >> 48, iommu->reg);
++               PCI_FUNC(source_id), addr >> 48, iommu->reg);*/
+         kind = "INTR-REMAP";
+         break;
+     default:
+-        printk(XENLOG_G_WARNING VTDPREFIX
++        /*printk(XENLOG_G_WARNING VTDPREFIX
+                "UNKNOWN: Request device [%04x:%02x:%02x.%u] "
+                "fault addr %"PRIx64", iommu reg = %p\n",
+                seg, PCI_BUS(source_id), PCI_SLOT(source_id),
+-               PCI_FUNC(source_id), addr, iommu->reg);
++               PCI_FUNC(source_id), addr, iommu->reg);*/
+         kind = "UNKNOWN";
+         break;
+     }
+ 
+-    printk(XENLOG_G_WARNING VTDPREFIX "%s: reason %02x - %s\n",
+-           kind, fault_reason, reason);
++    /*printk(XENLOG_G_WARNING VTDPREFIX "%s: reason %02x - %s\n",
++           kind, fault_reason, reason);*/
+ 
+     if ( iommu_verbose && fault_type == DMA_REMAP )
+         print_vtd_entries(iommu, PCI_BUS(source_id), PCI_DEVFN2(source_id),
